@@ -4,9 +4,8 @@ mininet_helpers.py - Mininet helper functions and executor class
 """
 
 import os
-import time
-from pathlib import Path
-from typing import List, Optional
+import subprocess
+from typing import List
 
 from mininet.net import Mininet
 from mininet.cli import CLI
@@ -63,7 +62,13 @@ class MininetExecutor:
         try:
             if 'iperf3' in cmd and '-t' in cmd:
                 # iperf3 with timeout - run and wait
-                proc = host.popen(cmd, shell=True)
+                # close_fds=True evita que este proceso herede descriptores
+                # abiertos de otros procesos concurrentes (p. ej. los
+                # servidores iperf3 lanzados con run_bg()), lo que causa
+                # el error "unable to send control message: Bad file
+                # descriptor" cuando varios flujos de iperf3 corren en
+                # paralelo desde el mismo proceso Python ejecutor.
+                proc = host.popen(cmd, shell=True, close_fds=True)
                 try:
                     stdout, stderr = proc.communicate(timeout=timeout)
                     returncode = proc.returncode
@@ -97,20 +102,40 @@ class MininetExecutor:
             return ProcessResult()
 
     def run_bg(self, host_key: str, cmd: str):
-        """Execute a command in background"""
+        """Execute a command in background (e.g. iperf3 -s servers)"""
         host = self.get_host(host_key)
 
         if 'SHELL' not in os.environ:
             os.environ['SHELL'] = '/bin/bash'
 
+        # IMPORTANTE: stdout/stderr van a DEVNULL (no PIPE) y close_fds=True.
+        # Si se dejan como PIPE (default de Host.popen) y nunca se leen,
+        # esos descriptores quedan abiertos indefinidamente en este proceso
+        # Python durante todo el experimento. Los clientes iperf3
+        # posteriores, lanzados concurrentemente vía threading + popen,
+        # pueden heredar esos descriptores sin cerrar (si no se pasa
+        # close_fds=True), lo que corrompe la numeración de file
+        # descriptors que iperf3 usa internamente para su socket de
+        # control y provoca "unable to send control message: Bad file
+        # descriptor".
         try:
-            proc = host.popen(cmd, shell=True)
+            proc = host.popen(
+                cmd, shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
             self.processes.append(proc)
             return proc
         except KeyError as e:
             if VERBOSE:
                 warn(f"Error in popen: {e}. Trying alternative method...\n")
-            proc = host.popen(['/bin/bash', '-c', cmd])
+            proc = host.popen(
+                ['/bin/bash', '-c', cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
             self.processes.append(proc)
             return proc
 
