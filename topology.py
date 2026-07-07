@@ -23,8 +23,8 @@ class SpineLeaf(Topo):
             print(f"Switch s{i} added with dpid {NODES[i-1]}")
             spines.append(spine)
         for j in range(1, n_leaf + 1):
-            leaf = self.addSwitch(f's{j+n_spine}', protocols='OpenFlow13', dpid=NODES[j-1])
-            print(f"Switch s{j} added with dpid {NODES[j-1]}")
+            leaf = self.addSwitch(f's{j+n_spine}', protocols='OpenFlow13', dpid=NODES[j+1])
+            print(f"Switch s{j} added with dpid {NODES[j+2]}")
             leafs.append(leaf)
             for spine_idx, spine in enumerate(spines, start=2):
                 self.addLink(leaf, spine,
