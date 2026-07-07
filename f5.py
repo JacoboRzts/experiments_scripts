@@ -114,43 +114,54 @@ def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool)
 
     # TCP servers on TCP receiver
     rx_tcp = escenario_cfg["tcp_receptor"]
+    ip_rx_tcp = HOSTS[rx_tcp]["ip"]
     executor.kill_iperf(rx_tcp)
-    time.sleep(1)
+    time.sleep(2)
 
     num_senders = len(escenario_cfg["tcp_senders"])
     puertos = [5201 + i for i in range(num_senders)]
 
-    # Start TCP servers with -D flag (daemon mode)
+    # Start TCP servers.
+    # NOTA: no usar -D/--daemon aqui. run_bg() ya lanza el proceso de forma
+    # asincrona via host.popen() (API de Mininet), asi que el servidor no
+    # necesita daemonizarse a si mismo. Ademas, en versiones recientes de
+    # iperf3 el flag corto -D fue reasignado a --bidir (solo valido en el
+    # cliente), lo que provoca "parameter error - some option you are
+    # trying to set is client only" si se usa en el servidor.
     for p in puertos:
         if VERBOSE:
             info(f"Starting TCP server on {rx_tcp} port {p}\n")
-        executor.run_bg(rx_tcp, f"iperf3 -s -p {p} -D")
+        executor.run_bg(rx_tcp, f"iperf3 -s -p {p} --bind {ip_rx_tcp}")
+        time.sleep(0.5)
 
     # UDP server on UDP receiver
     rx_udp = escenario_cfg["udp_receptor"]
+    ip_rx_udp = HOSTS[rx_udp]["ip"]
     executor.kill_iperf(rx_udp)
-    time.sleep(1)
+    time.sleep(2)
 
     if VERBOSE:
         info(f"Starting UDP server on {rx_udp} port 5400\n")
-    executor.run_bg(rx_udp, f"iperf3 -s -p 5400 -u -D")
+    executor.run_bg(rx_udp, f"iperf3 -s -p 5400 -u --bind {ip_rx_udp}")
 
     # Wait for servers to fully start
     time.sleep(3)
 
-    # Verify servers are running
-    if VERBOSE:
-        result = executor.run_cmd(rx_tcp, "pgrep -f 'iperf3 -s'")
-        if result.stdout.strip():
+    # Verify servers are running (siempre, no solo en modo verbose,
+    # para detectar fallos silenciosos de arranque)
+    result = executor.run_cmd(rx_tcp, "pgrep -f 'iperf3 -s'")
+    if result.stdout.strip():
+        if VERBOSE:
             info(f"TCP server running on {rx_tcp}\n")
-        else:
-            warn(f"WARNING: No TCP server found on {rx_tcp}\n")
+    else:
+        warn(f"WARNING: No TCP server found on {rx_tcp}\n")
 
-        result = executor.run_cmd(rx_udp, "pgrep -f 'iperf3 -s'")
-        if result.stdout.strip():
+    result = executor.run_cmd(rx_udp, "pgrep -f 'iperf3 -s'")
+    if result.stdout.strip():
+        if VERBOSE:
             info(f"UDP server running on {rx_udp}\n")
-        else:
-            warn(f"WARNING: No UDP server found on {rx_udp}\n")
+    else:
+        warn(f"WARNING: No UDP server found on {rx_udp}\n")
 
     info(f"Servers active: TCP on {rx_tcp}, UDP on {rx_udp}\n")
     return puertos
@@ -176,12 +187,17 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         }
         return
 
-    # Use -c flag for connect mode, remove redirection
+    # -c ya se especifico al inicio del comando (host destino). No repetir
+    # -c al final: al no llevar argumento, iperf3 consume el siguiente
+    # token ("-J") como si fuera el host, perdiendo la salida JSON y
+    # rompiendo el parseo posterior con json.loads().
+    ip_origen = HOSTS[sender]["ip"]
     cmd = (
         f"iperf3 -c {rx_ip} -p {port}"
         f" -t {DURATION} -Z -C {TCP_CONGESTION}"
         f" -l {TCP_PAYLOAD}"
-        f" -c -J"
+        f" --bind {ip_origen}"
+        f" -J"
     )
 
     try:
@@ -224,13 +240,15 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         }
         return
 
-    # Use -c flag for connect mode
+    # Mismo fix que en run_tcp_flow: no repetir -c al final del comando.
+    ip_origen = HOSTS[sender]["ip"]
     cmd = (
         f"iperf3 -c {rx_ip} -p {port} -u"
         f" -b {UDP_RATE}"
         f" -l {UDP_PAYLOAD}"
         f" -t {DURATION}"
-        f" -c -J"
+        f" --bind {ip_origen}"
+        f" -J"
     )
 
     try:
