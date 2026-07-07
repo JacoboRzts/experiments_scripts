@@ -123,7 +123,7 @@ def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool)
     for p in puertos:
         if VERBOSE:
             info(f"Starting TCP server on {rx_tcp} port {p}\n")
-        executor.run_bg(rx_tcp, f"iperf3 -s -p {p}")
+        executor.run_bg(rx_tcp, f"iperf3 -s -p {p} < /dev/null")
 
     # UDP server on UDP receiver
     rx_udp = escenario_cfg["udp_receptor"]
@@ -132,19 +132,19 @@ def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool)
 
     if VERBOSE:
         info(f"Starting UDP server on {rx_udp} port 5400\n")
-    executor.run_bg(rx_udp, f"iperf3 -s -p 5400 -u")
+    executor.run_bg(rx_udp, "iperf3 -s -p 5400 -u < /dev/null")
 
     time.sleep(2)
 
     # Verify servers are running
     if VERBOSE:
-        result = executor.run_cmd(rx_tcp, "pgrep -f 'iperf3 -s'")
+        result = executor.run_cmd(rx_tcp, "pgrep -f 'iperf3 -s < /dev/null'")
         if result.stdout.strip():
             info(f"TCP server running on {rx_tcp}\n")
         else:
             warn(f"WARNING: No TCP server found on {rx_tcp}\n")
 
-        result = executor.run_cmd(rx_udp, "pgrep -f 'iperf3 -s'")
+        result = executor.run_cmd(rx_udp, "pgrep -f 'iperf3 -s < /dev/null'")
         if result.stdout.strip():
             info(f"UDP server running on {rx_udp}\n")
         else:
@@ -177,7 +177,7 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
         f"iperf3 -c {rx_ip} -p {port}"
         f" -t {DURATION} -Z -C {TCP_CONGESTION}"
         f" -l {TCP_PAYLOAD}"
-        f" -J"
+        f" -J < /dev/null"
     )
 
     try:
@@ -223,7 +223,7 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
         f" -b {UDP_RATE}"
         f" -l {UDP_PAYLOAD}"
         f" -t {DURATION}"
-        f" -J"
+        f" -J < /dev/null"
     )
 
     try:
