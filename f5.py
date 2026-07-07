@@ -164,8 +164,7 @@ def stop_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool):
         executor.kill_iperf(h)
 
 
-def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
-                 results: dict, errors: list, dry_run: bool):
+def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, results: dict, errors: list, dry_run: bool):
     """Run TCP iperf3 flow from sender to receiver"""
     if dry_run:
         results[sender] = {
@@ -178,14 +177,17 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         f"iperf3 -c {rx_ip} -p {port}"
         f" -t {DURATION} -Z -C {TCP_CONGESTION}"
         f" -l {TCP_PAYLOAD}"
-        f" -J 2>/dev/null"
+        f" -J"
     )
 
     try:
         res = executor.run_cmd(sender, cmd, timeout=DURATION + 20)
 
         if res.returncode != 0 or not res.stdout.strip():
-            errors.append(f"{sender}: TCP iperf3 rc={res.returncode}")
+            error_detail = f"{sender}: TCP iperf3 rc={res.returncode}"
+            if res.stderr:
+                error_detail += f", stderr={res.stderr.strip()}"
+            errors.append(error_detail)
             results[sender] = None
             return
 
@@ -207,8 +209,7 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         executor.kill_iperf(sender)
 
 
-def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
-                 results: dict, errors: list, dry_run: bool):
+def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, results: dict, errors: list, dry_run: bool):
     """Run UDP iperf3 flow from sender to receiver"""
     if dry_run:
         results[sender] = {
@@ -222,14 +223,17 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         f" -b {UDP_RATE}"
         f" -l {UDP_PAYLOAD}"
         f" -t {DURATION}"
-        f" -J 2>/dev/null"
+        f" -J"
     )
 
     try:
         res = executor.run_cmd(sender, cmd, timeout=DURATION + 20)
 
         if res.returncode != 0 or not res.stdout.strip():
-            errors.append(f"{sender}: UDP iperf3 rc={res.returncode}")
+            error_detail = f"{sender}: UDP iperf3 rc={res.returncode}"
+            if res.stderr:
+                error_detail += f", stderr={res.stderr.strip()}"
+            errors.append(error_detail)
             results[sender] = None
             return
 
@@ -253,9 +257,7 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         executor.kill_iperf(sender)
 
 
-def run_rep(executor: MininetExecutor, escenario_cfg: dict, puertos: List[int],
-            rep: int, topology: str, esc: str, out_dir: Path,
-            dry_run: bool) -> Optional[Dict]:
+def run_rep(executor: MininetExecutor, escenario_cfg: dict, puertos: List[int], rep: int, topology: str, esc: str, out_dir: Path, dry_run: bool) -> Optional[Dict]:
     """Run one repetition for a scenario"""
     rx_tcp_ip = HOSTS[escenario_cfg["tcp_receptor"]]["ip"]
     rx_udp_ip = HOSTS[escenario_cfg["udp_receptor"]]["ip"]
@@ -380,8 +382,7 @@ def run_rep(executor: MininetExecutor, escenario_cfg: dict, puertos: List[int],
     return medicion
 
 
-def run_scenario(executor: MininetExecutor, topology: str, esc: str,
-                 out_dir: Path, dry_run: bool) -> None:
+def run_scenario(executor: MininetExecutor, topology: str, esc: str, out_dir: Path, dry_run: bool) -> None:
     """Run a complete scenario"""
     escenario_cfg = SCENARIO["escenarios"][esc]
     tcp_senders = escenario_cfg["tcp_senders"]
@@ -507,8 +508,7 @@ def run_scenario(executor: MininetExecutor, topology: str, esc: str,
     print(f"{'='*70}\n")
 
 
-def run_experiment(executor: MininetExecutor, topology: str,
-                   escenarios: List[str], dry_run: bool) -> None:
+def run_experiment(executor: MininetExecutor, topology: str, escenarios: List[str], dry_run: bool) -> None:
     """Run complete F5 experiment"""
     out_dir = OUTPUT_BASE / topology / "fase5_incast"
     out_dir.mkdir(parents=True, exist_ok=True)
