@@ -21,7 +21,7 @@ from mininet_helpers import (
     MininetExecutor, create_network, configure_tcp, 
     preflight, set_verbose, VERBOSE
 )
-from statistics import (
+from stats import (
     compute_rsd, inject_meta, extract_mbps, 
     save_summary, safe_stats
 )
@@ -328,7 +328,7 @@ def main():
                         help="Skip preflight verification")
     parser.add_argument("--cli", action="store_true",
                         help="Start Mininet CLI after configuration")
-    parser.add_argument("--controller", type=str, default=None,
+    parser.add_argument("--controller", type=str, default="172.17.0.2",
                         help="Controller IP (e.g., 172.17.0.2)")
     parser.add_argument("--verbose", action="store_true",
                         help="Show verbose output including Mininet messages")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-statistics.py - Common statistical functions for network experiments
+stats.py - Common statistical functions for network experiments
 """
 
 import json
