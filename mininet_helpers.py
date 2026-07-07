@@ -5,7 +5,10 @@ mininet_helpers.py - Mininet helper functions and executor class
 
 import os
 import subprocess
-from typing import List
+import threading
+import time
+from pathlib import Path
+from typing import List, Optional
 
 from mininet.net import Mininet
 from mininet.cli import CLI
@@ -38,6 +41,18 @@ class MininetExecutor:
         self.net = net
         self.processes = []
         self.host_cache = {}
+        # Lock para serializar UNICAMENTE el momento de creacion del
+        # proceso (fork+exec via host.popen). fork() no es completamente
+        # seguro cuando varios threads de Python lo invocan casi al mismo
+        # tiempo; esto puede corromper el estado de file descriptors del
+        # proceso hijo (iperf3), causando errores como "unable to send
+        # control message: Bad file descriptor" incluso con conectividad
+        # de red perfecta. Una vez el proceso ya fue creado (fork+exec
+        # completado), corre de forma totalmente independiente y en
+        # paralelo real con los demas -- el lock solo protege el
+        # instante de creacion, que toma milisegundos, no la duracion
+        # completa del test.
+        self._popen_lock = threading.Lock()
 
         # Create host cache for fast access
         for host in net.hosts:
@@ -62,13 +77,13 @@ class MininetExecutor:
         try:
             if 'iperf3' in cmd and '-t' in cmd:
                 # iperf3 with timeout - run and wait
-                # close_fds=True evita que este proceso herede descriptores
-                # abiertos de otros procesos concurrentes (p. ej. los
-                # servidores iperf3 lanzados con run_bg()), lo que causa
-                # el error "unable to send control message: Bad file
-                # descriptor" cuando varios flujos de iperf3 corren en
-                # paralelo desde el mismo proceso Python ejecutor.
-                proc = host.popen(cmd, shell=True, close_fds=True)
+                # close_fds=True evita heredar descriptores abiertos de
+                # otros procesos. El lock serializa solo la creacion del
+                # proceso (fork+exec) para evitar la condicion de carrera
+                # de fork() entre threads; una vez creado, corre en
+                # paralelo real (communicate() queda fuera del lock).
+                with self._popen_lock:
+                    proc = host.popen(cmd, shell=True, close_fds=True)
                 try:
                     stdout, stderr = proc.communicate(timeout=timeout)
                     returncode = proc.returncode
@@ -119,23 +134,25 @@ class MininetExecutor:
         # control y provoca "unable to send control message: Bad file
         # descriptor".
         try:
-            proc = host.popen(
-                cmd, shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+            with self._popen_lock:
+                proc = host.popen(
+                    cmd, shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                )
             self.processes.append(proc)
             return proc
         except KeyError as e:
             if VERBOSE:
                 warn(f"Error in popen: {e}. Trying alternative method...\n")
-            proc = host.popen(
-                ['/bin/bash', '-c', cmd],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+            with self._popen_lock:
+                proc = host.popen(
+                    ['/bin/bash', '-c', cmd],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                )
             self.processes.append(proc)
             return proc
 
