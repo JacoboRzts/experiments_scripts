@@ -11,6 +11,7 @@ import json
 import statistics
 import threading
 import time
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -83,19 +84,22 @@ def start_servers(executor: MininetExecutor, dry_run: bool):
     if dry_run:
         return
     destinos = set(SCENARIO["destino"].values())
+    # First, kill all existing servers
     for destino in destinos:
-        # Kill any existing iperf3 processes
         executor.kill_iperf(destino)
-        time.sleep(0.5)
-        
-        # Start servers for each port on this destination
+    time.sleep(1)
+    # Start servers with explicit IP binding and longer timeout
+    for destino in destinos:
+        ip_destino = HOSTS[destino]["ip"]
         for emisor, puerto in SCENARIO["puertos"].items():
             if SCENARIO["destino"][emisor] == destino:
                 if VERBOSE:
-                    info(f"Starting UDP server on {destino} port {puerto}\n")
-                executor.run_bg(destino, f"iperf3 -s -p {puerto}")
-    # Wait for servers to start and verify
-    time.sleep(2)
+                    info(f"Starting UDP server on {destino}:{puerto} ({ip_destino})\n")
+                # Bind to specific IP to avoid issues
+                cmd = f"iperf3 -s -p {puerto} --bind {ip_destino} -1"
+                executor.run_bg(destino, cmd)
+    # Wait longer for servers to initialize
+    time.sleep(3)
     # Verify servers are running
     for destino in destinos:
         result = executor.run_cmd(destino, "pgrep -f 'iperf3 -s'")
@@ -141,20 +145,41 @@ def run_rate(executor: MininetExecutor, topology: str, rate_mbps: int, out_dir: 
         print(f"\r  Rep {rep:02d}/{REPS_MAX} measuring {rate_mbps}Mbps...  ",
               end="", flush=True)
 
-        results = {}
-        errors = []
-        threads = [
-            threading.Thread(target=run_udp_flow,
-                             args=(executor, h, rate_mbps, results, errors, dry_run))
-            for h in emisores
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=DURATION + 25)
+        # Try up to 3 times per repetition
+        max_retries = 3
+        for attempt in range(max_retries):
+            if attempt > 0:
+                info(f"\n  Retry {attempt}/{max_retries-1} for rep {rep}...\n")
+                # Restart servers if retrying
+                if not dry_run:
+                    stop_servers(executor, dry_run)
+                    time.sleep(1)
+                    start_servers(executor, dry_run)
+                    time.sleep(2)
+            
+            results = {}
+            errors = []
+            threads = [
+                threading.Thread(target=run_udp_flow,
+                                 args=(executor, h, rate_mbps, results, errors, dry_run))
+                for h in emisores
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=DURATION + 25)
 
-        for e in errors:
-            print(f"\n    WARN  {e}", end="")
+            # Check if all flows succeeded
+            all_success = all(r is not None and r.get("jitter_ms") is not None 
+                             for r in results.values())
+            
+            if all_success:
+                break  # Success, continue with results
+            else:
+                if attempt == max_retries - 1:
+                    # Last attempt failed, log errors
+                    for e in errors:
+                        print(f"\n    WARN  {e}", end="")
 
         # Extract jitter from each sender
         jitter_vals = []
@@ -249,38 +274,61 @@ def run_udp_flow(executor: MininetExecutor, host_key: str, rate_mbps: int, resul
     destino = SCENARIO["destino"][host_key]
     ip_destino = HOSTS[destino]["ip"]
     puerto = SCENARIO["puertos"][host_key]
-
+    # Get source IP for binding
+    ip_origen = HOSTS[host_key]["ip"]
+    # Use shorter initial test to verify connectivity
+    # Then run the real test
+    if VERBOSE:
+        info(f"  {host_key} -> {destino} ({ip_destino}:{puerto})\n")
+    # First, do a quick connectivity test with UDP
+    test_cmd = (
+        f"iperf3 -c {ip_destino} -p {puerto}"
+        f" -u -b 1M"
+        f" -l {PKT_SIZE}"
+        f" -t 1"
+        f" --bind {ip_origen}"
+        f" -J 2>/dev/null"
+    )
+    try:
+        test_res = executor.run_cmd(host_key, test_cmd, timeout=5)
+        if test_res.returncode != 0:
+            # If test fails, server might not be ready
+            if VERBOSE:
+                info(f"  {host_key}: Quick test failed, retrying...\n")
+            time.sleep(1)
+    
+    except Exception:
+        pass  # Ignore test errors, proceed with main test
+    # Main test command with more robust options
     cmd = (
         f"iperf3 -c {ip_destino} -p {puerto}"
         f" -u -b {rate_mbps}M"
         f" -l {PKT_SIZE}"
         f" -t {DURATION}"
-        f" -J"
+        f" --bind {ip_origen}"
+        f" -J 2>/dev/null"
     )
-
     try:
         res = executor.run_cmd(host_key, cmd, timeout=DURATION + 20)
 
         if res.returncode != 0 or not res.stdout.strip():
-            # Get more error details
             error_detail = f"{host_key}: iperf3 rc={res.returncode}"
             if res.stderr:
                 error_detail += f", stderr={res.stderr.strip()}"
             errors.append(error_detail)
-            
-            # Try to check if server is reachable
-            if VERBOSE:
-                ping_cmd = f"ping -c 1 -W 1 {ip_destino}"
-                ping_res = executor.run_cmd(host_key, ping_cmd)
-                if ping_res.returncode != 0:
-                    info(f"  {host_key} cannot reach {ip_destino}\n")
-                else:
-                    info(f"  {host_key} can reach {ip_destino} but iperf3 failed\n")
-            
             results[host_key] = None
             return
 
-        data = json.loads(res.stdout)
+        # Parse JSON output
+        try:
+            data = json.loads(res.stdout)
+        except json.JSONDecodeError as e:
+            errors.append(f"{host_key}: Invalid JSON - {e}")
+            if VERBOSE and res.stdout:
+                info(f"  Output: {res.stdout[:200]}\n")
+            results[host_key] = None
+            return
+
         end = data.get("end", {})
         s = end.get("sum", {})
 
@@ -294,11 +342,10 @@ def run_udp_flow(executor: MininetExecutor, host_key: str, rate_mbps: int, resul
             "throughput_mbps": round(throughput_bps / 1e6, 2),
         }
 
-    except json.JSONDecodeError as e:
-        errors.append(f"{host_key}: Invalid JSON - {e}")
-        if VERBOSE and res.stdout:
-            info(f"  Output: {res.stdout[:200]}\n")
+    except subprocess.TimeoutExpired:
+        errors.append(f"{host_key}: timeout ({DURATION + 20}s)")
         results[host_key] = None
+        executor.kill_iperf(host_key)
     except Exception as e:
         errors.append(f"{host_key}: error - {e}")
         results[host_key] = None
