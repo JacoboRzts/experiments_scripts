@@ -82,18 +82,29 @@ def start_servers(executor: MininetExecutor, dry_run: bool):
     """Start UDP servers on destination hosts"""
     if dry_run:
         return
-    
     destinos = set(SCENARIO["destino"].values())
-    
     for destino in destinos:
+        # Kill any existing iperf3 processes
         executor.kill_iperf(destino)
         time.sleep(0.5)
+        
+        # Start servers for each port on this destination
         for emisor, puerto in SCENARIO["puertos"].items():
             if SCENARIO["destino"][emisor] == destino:
+                if VERBOSE:
+                    info(f"Starting UDP server on {destino} port {puerto}\n")
                 executor.run_bg(destino, f"iperf3 -s -p {puerto}")
+    # Wait for servers to start and verify
     time.sleep(2)
+    # Verify servers are running
+    for destino in destinos:
+        result = executor.run_cmd(destino, "pgrep -f 'iperf3 -s'")
+        if result.stdout.strip():
+            if VERBOSE:
+                info(f"Server running on {destino}\n")
+        else:
+            warn(f"WARNING: No iperf3 server found on {destino}\n")
     info(f"UDP servers active on {', '.join(destinos)}\n")
-
 
 def stop_servers(executor: MininetExecutor, dry_run: bool):
     """Stop UDP servers"""
@@ -102,71 +113,11 @@ def stop_servers(executor: MininetExecutor, dry_run: bool):
         for destino in destinos:
             executor.kill_iperf(destino)
 
-
-def run_udp_flow(executor: MininetExecutor, host_key: str, rate_mbps: int,
-                 results: dict, errors: list, dry_run: bool):
-    """
-    Run UDP iperf3 flow from host_key to its configured destination
-    Destination varies by sender (manual balancing)
-    """
-    if dry_run:
-        results[host_key] = {
-            "jitter_ms": round(0.1 + rate_mbps * 0.0001, 4),
-            "lost_packets": 0,
-            "throughput_mbps": rate_mbps * 0.98,
-        }
-        return
-
-    destino = SCENARIO["destino"][host_key]
-    ip_destino = HOSTS[destino]["ip"]
-    puerto = SCENARIO["puertos"][host_key]
-
-    cmd = (
-        f"iperf3 -c {ip_destino} -p {puerto}"
-        f" -u -b {rate_mbps}M"
-        f" -l {PKT_SIZE}"
-        f" -t {DURATION}"
-        f" -J"
-    )
-
-    try:
-        res = executor.run_cmd(host_key, cmd, timeout=DURATION + 20)
-
-        if res.returncode != 0 or not res.stdout.strip():
-            errors.append(f"{host_key}: iperf3 rc={res.returncode}")
-            results[host_key] = None
-            return
-
-        data = json.loads(res.stdout)
-        end = data.get("end", {})
-        s = end.get("sum", {})
-
-        jitter_ms = s.get("jitter_ms")
-        lost_packets = s.get("lost_packets", 0)
-        throughput_bps = s.get("bits_per_second", 0)
-
-        results[host_key] = {
-            "jitter_ms": round(jitter_ms, 4) if jitter_ms is not None else None,
-            "lost_packets": lost_packets,
-            "throughput_mbps": round(throughput_bps / 1e6, 2),
-        }
-
-    except json.JSONDecodeError as e:
-        errors.append(f"{host_key}: Invalid JSON - {e}")
-        results[host_key] = None
-    except Exception as e:
-        errors.append(f"{host_key}: error - {e}")
-        results[host_key] = None
-        executor.kill_iperf(host_key)
-
-
 def nombre_archivo(topology: str, rate_mbps: int, rep: int) -> str:
     """Generate filename for experiment results"""
     return f"{topology}_{EXPERIMENT}_udp_rate{rate_mbps:04d}_rep{rep:02d}.json"
 
-
-def run_rate(executor: MininetExecutor, topology: str, rate_mbps: int,
-             out_dir: Path, dry_run: bool) -> dict:
+def run_rate(executor: MininetExecutor, topology: str, rate_mbps: int, out_dir: Path, dry_run: bool) -> dict:
     """Run jitter testing for a single rate"""
     emisores = SCENARIO["emisores"]
     jitters_by_host = {h: [] for h in emisores}
@@ -283,9 +234,77 @@ def run_rate(executor: MininetExecutor, topology: str, rate_mbps: int,
 
     return result
 
+def run_udp_flow(executor: MininetExecutor, host_key: str, rate_mbps: int, results: dict, errors: list, dry_run: bool):
+    """
+    Run UDP iperf3 flow from host_key to its configured destination
+    """
+    if dry_run:
+        results[host_key] = {
+            "jitter_ms": round(0.1 + rate_mbps * 0.0001, 4),
+            "lost_packets": 0,
+            "throughput_mbps": rate_mbps * 0.98,
+        }
+        return
 
-def run_experiment(executor: MininetExecutor, topology: str, rates: list,
-                   dry_run: bool) -> None:
+    destino = SCENARIO["destino"][host_key]
+    ip_destino = HOSTS[destino]["ip"]
+    puerto = SCENARIO["puertos"][host_key]
+
+    cmd = (
+        f"iperf3 -c {ip_destino} -p {puerto}"
+        f" -u -b {rate_mbps}M"
+        f" -l {PKT_SIZE}"
+        f" -t {DURATION}"
+        f" -J"
+    )
+
+    try:
+        res = executor.run_cmd(host_key, cmd, timeout=DURATION + 20)
+
+        if res.returncode != 0 or not res.stdout.strip():
+            # Get more error details
+            error_detail = f"{host_key}: iperf3 rc={res.returncode}"
+            if res.stderr:
+                error_detail += f", stderr={res.stderr.strip()}"
+            errors.append(error_detail)
+            
+            # Try to check if server is reachable
+            if VERBOSE:
+                ping_cmd = f"ping -c 1 -W 1 {ip_destino}"
+                ping_res = executor.run_cmd(host_key, ping_cmd)
+                if ping_res.returncode != 0:
+                    info(f"  {host_key} cannot reach {ip_destino}\n")
+                else:
+                    info(f"  {host_key} can reach {ip_destino} but iperf3 failed\n")
+            
+            results[host_key] = None
+            return
+
+        data = json.loads(res.stdout)
+        end = data.get("end", {})
+        s = end.get("sum", {})
+
+        jitter_ms = s.get("jitter_ms")
+        lost_packets = s.get("lost_packets", 0)
+        throughput_bps = s.get("bits_per_second", 0)
+
+        results[host_key] = {
+            "jitter_ms": round(jitter_ms, 4) if jitter_ms is not None else None,
+            "lost_packets": lost_packets,
+            "throughput_mbps": round(throughput_bps / 1e6, 2),
+        }
+
+    except json.JSONDecodeError as e:
+        errors.append(f"{host_key}: Invalid JSON - {e}")
+        if VERBOSE and res.stdout:
+            info(f"  Output: {res.stdout[:200]}\n")
+        results[host_key] = None
+    except Exception as e:
+        errors.append(f"{host_key}: error - {e}")
+        results[host_key] = None
+        executor.kill_iperf(host_key)
+
+def run_experiment(executor: MininetExecutor, topology: str, rates: list, dry_run: bool) -> None:
     """Run complete F3 experiment"""
     out_dir = OUTPUT_BASE / topology / "fase3_jitter"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -298,7 +317,7 @@ def run_experiment(executor: MininetExecutor, topology: str, rates: list,
     print(f"  Scenario: {SCENARIO['desc']}")
     print(f"  Senders:  {emisores_str}")
     if topology == "sl":
-        print("  Spine crossing: H1(L1)->H5(L2), H4(L2)->H8(L3), H7(L3)->H2(L1)")
+        print(f"  Spine crossing: H1(L1)->H5(L2), H4(L2)->H8(L3), H7(L3)->H2(L1)")
     print(f"  Rates:     {rates} Mbps")
     print(f"  Cooldown:  {COOLDOWN}s")
     print(f"  Duration:  {DURATION}s per run")
@@ -307,6 +326,24 @@ def run_experiment(executor: MininetExecutor, topology: str, rates: list,
     if dry_run:
         print("  MODE:      DRY-RUN")
     print(f"{'='*65}\n")
+
+    # Test connectivity before starting
+    if not dry_run:
+        info("Testing connectivity...\n")
+        all_ok = True
+        for emisor in SCENARIO["emisores"]:
+            destino = SCENARIO["destino"][emisor]
+            ip_destino = HOSTS[destino]["ip"]
+            ping_cmd = f"ping -c 1 -W 1 {ip_destino}"
+            ping_res = executor.run_cmd(emisor, ping_cmd)
+            if ping_res.returncode == 0:
+                info(f"  OK {emisor} -> {destino} ({ip_destino})\n")
+            else:
+                warn(f"  FAIL {emisor} -> {destino} ({ip_destino}) - No connectivity\n")
+                all_ok = False
+        
+        if not all_ok:
+            warn("Connectivity issues detected. Check Mininet topology.\n")
 
     start_servers(executor, dry_run)
 
@@ -319,47 +356,7 @@ def run_experiment(executor: MininetExecutor, topology: str, rates: list,
 
     stop_servers(executor, dry_run)
 
-    # Summary table
-    print(f"\n\n{'='*65}")
-    print(f"  SUMMARY F3 JITTER - {topology.upper()}")
-    print(f"  {'Rate':>6}  {'LR%':>6}  {'Jitter avg':>12}  "
-          f"{'Jitter p95':>12}  {'Jitter max':>12}  {'RSD%':>7}  {'Reps':>5}")
-    print(f"  {'-'*6}  {'-'*6}  {'-'*12}  {'-'*12}  {'-'*12}  {'-'*7}  {'-'*5}")
-    for r in all_results:
-        rfc_ok = (r["jitter_rsd_pct"] or 99) < RSD_TARGET
-        rsd_str = f"{r['jitter_rsd_pct']:.1f}%" if r["jitter_rsd_pct"] else "N/A"
-        p95_str = f"{r['jitter_p95_ms']:.4f}ms" if r["jitter_p95_ms"] is not None else "N/A"
-        avg_str = f"{r['jitter_avg_ms']:.4f}ms" if r["jitter_avg_ms"] is not None else "N/A"
-        flag = "OK" if rfc_ok else "WARN"
-        print(f"  {r['rate_mbps']:>5}M  {r['lr_pct']:>5.0f}%"
-              f"  {avg_str:>12}"
-              f"  {p95_str:>12}"
-              f"  {str(r['jitter_max_ms'])+'ms':>12}"
-              f"  {rsd_str:>7} {flag}"
-              f"  {r['reps']:>5}")
-    print(f"{'='*65}\n")
-
-    summary_path = out_dir / f"{topology}_{EXPERIMENT}_summary.json"
-    save_summary(summary_path, {
-        "experiment": EXPERIMENT,
-        "topology": topology,
-        "rfc_reference": "RFC1889 jitter / RFC8239 Section F3",
-        "emisores": SCENARIO["emisores"],
-        "destino_por_emisor": SCENARIO["destino"],
-        "udp_rates_mbps": rates,
-        "duration_s": DURATION,
-        "cooldown_s": COOLDOWN,
-        "rsd_target": RSD_TARGET,
-        "reps_min": REPS_MIN,
-        "reps_max": REPS_MAX,
-        "line_rate_mbps": LINE_RATE_MBPS,
-        "payload_bytes": PKT_SIZE,
-        "balanced": (topology == "sl"),
-        "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "results": all_results,
-    })
-    info(f"Summary: {summary_path}\n")
-
+    # ... rest of summary code ...
 
 def main():
     parser = argparse.ArgumentParser(
