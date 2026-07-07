@@ -87,7 +87,7 @@ def start_servers(executor: MininetExecutor, dry_run: bool):
     # First, kill all existing servers
     for destino in destinos:
         executor.kill_iperf(destino)
-    time.sleep(1)
+    time.sleep(2)
     # Start servers with explicit IP binding and longer timeout
     for destino in destinos:
         ip_destino = HOSTS[destino]["ip"]
@@ -98,6 +98,7 @@ def start_servers(executor: MininetExecutor, dry_run: bool):
                 # Bind to specific IP to avoid issues
                 cmd = f"iperf3 -s -p {puerto} --bind {ip_destino} -1"
                 executor.run_bg(destino, cmd)
+                time.sleep(1)
     # Wait longer for servers to initialize
     time.sleep(3)
     # Verify servers are running
@@ -116,6 +117,7 @@ def stop_servers(executor: MininetExecutor, dry_run: bool):
         destinos = set(SCENARIO["destino"].values())
         for destino in destinos:
             executor.kill_iperf(destino)
+            time.sleep(1)
 
 def nombre_archivo(topology: str, rate_mbps: int, rep: int) -> str:
     """Generate filename for experiment results"""
