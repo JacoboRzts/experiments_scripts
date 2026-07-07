@@ -6,11 +6,11 @@ from mininet.link import TCLink
 from mininet.topo import Topo
 
 NODES = [
-    "2977893393545632",
-    "2977893393545536",
-    "2977893393522176",
-    "2977893393526016",
-    "2977893393165440",
+    "A9460D5E6B9A0",
+    "A9460D5E6B940",
+    "A9460D5E65E00",
+    "A9460D5E66D00",
+    "A9460D5E0EC80",
 ]
 
 class SpineLeaf(Topo):
@@ -20,16 +20,14 @@ class SpineLeaf(Topo):
         leafs = []
         for i in range(1, n_spine + 1):
             spine = self.addSwitch(f's{i}', protocols='OpenFlow13', dpid=NODES[i-1])
-            print(f"Switch s{i} added with dpid {NODES[i-1]}")
             spines.append(spine)
         for j in range(1, n_leaf + 1):
             leaf = self.addSwitch(f's{j+n_spine}', protocols='OpenFlow13', dpid=NODES[j+1])
-            print(f"Switch s{j} added with dpid {NODES[j+2]}")
             leafs.append(leaf)
             for spine_idx, spine in enumerate(spines, start=2):
                 self.addLink(leaf, spine,
                             port1=spine_idx,
-                            port2=j + 1, bw=1000, delay='1ms') 
+                            port2=j + 1, bw=1000, delay='1ms')
             for k in range(1, n_host + 1):
                 host_id = (j-1) * n_host + k
                 ip = f"10.0.{j}.{k}/16"
@@ -74,7 +72,6 @@ class FatTree(Topo):
                     port2=12 + i,
                     bw=1000, delay='1ms'
                 )
-        
         edge = edge_list[-1]
         for i in range(1, 3):
             host = self.addHost(f"h{i+8}", ip=f"10.0.2.{i+4}/16")
