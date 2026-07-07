@@ -96,7 +96,7 @@ def start_servers(executor: MininetExecutor, dry_run: bool):
                 if VERBOSE:
                     info(f"Starting UDP server on {destino}:{puerto} ({ip_destino})\n")
                 # Bind to specific IP to avoid issues
-                cmd = f"iperf3 -s -p {puerto} --bind {ip_destino} -1"
+                cmd = f"iperf3 -s -p {puerto} --bind {ip_destino}"
                 executor.run_bg(destino, cmd)
                 time.sleep(1)
     # Wait longer for servers to initialize
