@@ -115,36 +115,38 @@ def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool)
     # TCP servers on TCP receiver
     rx_tcp = escenario_cfg["tcp_receptor"]
     executor.kill_iperf(rx_tcp)
-    time.sleep(0.5)
+    time.sleep(1)
 
     num_senders = len(escenario_cfg["tcp_senders"])
     puertos = [5201 + i for i in range(num_senders)]
 
+    # Start TCP servers with -D flag (daemon mode)
     for p in puertos:
         if VERBOSE:
             info(f"Starting TCP server on {rx_tcp} port {p}\n")
-        executor.run_bg(rx_tcp, f"iperf3 -s -p {p} < /dev/null")
+        executor.run_bg(rx_tcp, f"iperf3 -s -p {p} -D")
 
     # UDP server on UDP receiver
     rx_udp = escenario_cfg["udp_receptor"]
     executor.kill_iperf(rx_udp)
-    time.sleep(0.5)
+    time.sleep(1)
 
     if VERBOSE:
         info(f"Starting UDP server on {rx_udp} port 5400\n")
-    executor.run_bg(rx_udp, "iperf3 -s -p 5400 -u < /dev/null")
+    executor.run_bg(rx_udp, f"iperf3 -s -p 5400 -u -D")
 
-    time.sleep(2)
+    # Wait for servers to fully start
+    time.sleep(3)
 
     # Verify servers are running
     if VERBOSE:
-        result = executor.run_cmd(rx_tcp, "pgrep -f 'iperf3 -s < /dev/null'")
+        result = executor.run_cmd(rx_tcp, "pgrep -f 'iperf3 -s'")
         if result.stdout.strip():
             info(f"TCP server running on {rx_tcp}\n")
         else:
             warn(f"WARNING: No TCP server found on {rx_tcp}\n")
 
-        result = executor.run_cmd(rx_udp, "pgrep -f 'iperf3 -s < /dev/null'")
+        result = executor.run_cmd(rx_udp, "pgrep -f 'iperf3 -s'")
         if result.stdout.strip():
             info(f"UDP server running on {rx_udp}\n")
         else:
@@ -164,7 +166,8 @@ def stop_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool):
         executor.kill_iperf(h)
 
 
-def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, results: dict, errors: list, dry_run: bool):
+def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
+                 results: dict, errors: list, dry_run: bool):
     """Run TCP iperf3 flow from sender to receiver"""
     if dry_run:
         results[sender] = {
@@ -173,11 +176,12 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
         }
         return
 
+    # Use -c flag for connect mode, remove redirection
     cmd = (
         f"iperf3 -c {rx_ip} -p {port}"
         f" -t {DURATION} -Z -C {TCP_CONGESTION}"
         f" -l {TCP_PAYLOAD}"
-        f" -J < /dev/null"
+        f" -c -J"
     )
 
     try:
@@ -188,6 +192,7 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
             if res.stderr:
                 error_detail += f", stderr={res.stderr.strip()}"
             errors.append(error_detail)
+            executor.kill_iperf(sender)
             results[sender] = None
             return
 
@@ -209,7 +214,8 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
         executor.kill_iperf(sender)
 
 
-def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, results: dict, errors: list, dry_run: bool):
+def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
+                 results: dict, errors: list, dry_run: bool):
     """Run UDP iperf3 flow from sender to receiver"""
     if dry_run:
         results[sender] = {
@@ -218,12 +224,13 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
         }
         return
 
+    # Use -c flag for connect mode
     cmd = (
         f"iperf3 -c {rx_ip} -p {port} -u"
         f" -b {UDP_RATE}"
         f" -l {UDP_PAYLOAD}"
         f" -t {DURATION}"
-        f" -J < /dev/null"
+        f" -c -J"
     )
 
     try:
@@ -234,6 +241,7 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
             if res.stderr:
                 error_detail += f", stderr={res.stderr.strip()}"
             errors.append(error_detail)
+            executor.kill_iperf(sender)
             results[sender] = None
             return
 
@@ -257,7 +265,9 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, 
         executor.kill_iperf(sender)
 
 
-def run_rep(executor: MininetExecutor, escenario_cfg: dict, puertos: List[int], rep: int, topology: str, esc: str, out_dir: Path, dry_run: bool) -> Optional[Dict]:
+def run_rep(executor: MininetExecutor, escenario_cfg: dict, puertos: List[int],
+            rep: int, topology: str, esc: str, out_dir: Path,
+            dry_run: bool) -> Optional[Dict]:
     """Run one repetition for a scenario"""
     rx_tcp_ip = HOSTS[escenario_cfg["tcp_receptor"]]["ip"]
     rx_udp_ip = HOSTS[escenario_cfg["udp_receptor"]]["ip"]
@@ -382,7 +392,8 @@ def run_rep(executor: MininetExecutor, escenario_cfg: dict, puertos: List[int], 
     return medicion
 
 
-def run_scenario(executor: MininetExecutor, topology: str, esc: str, out_dir: Path, dry_run: bool) -> None:
+def run_scenario(executor: MininetExecutor, topology: str, esc: str,
+                 out_dir: Path, dry_run: bool) -> None:
     """Run a complete scenario"""
     escenario_cfg = SCENARIO["escenarios"][esc]
     tcp_senders = escenario_cfg["tcp_senders"]
@@ -508,7 +519,8 @@ def run_scenario(executor: MininetExecutor, topology: str, esc: str, out_dir: Pa
     print(f"{'='*70}\n")
 
 
-def run_experiment(executor: MininetExecutor, topology: str, escenarios: List[str], dry_run: bool) -> None:
+def run_experiment(executor: MininetExecutor, topology: str,
+                   escenarios: List[str], dry_run: bool) -> None:
     """Run complete F5 experiment"""
     out_dir = OUTPUT_BASE / topology / "fase5_incast"
     out_dir.mkdir(parents=True, exist_ok=True)
