@@ -109,8 +109,12 @@ TOPOLOGIES = {
 
 def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool) -> List[int]:
     """Start TCP and UDP servers for the scenario"""
+
+    num_senders = len(escenario_cfg["tcp_senders"])
+    puertos = [5201 + i for i in range(num_senders)]
+    
     if dry_run:
-        return []
+        return puertos
 
     # TCP servers on TCP receiver
     rx_tcp = escenario_cfg["tcp_receptor"]
@@ -118,8 +122,6 @@ def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool)
     executor.kill_iperf(rx_tcp)
     time.sleep(2)
 
-    num_senders = len(escenario_cfg["tcp_senders"])
-    puertos = [5201 + i for i in range(num_senders)]
 
     for p in puertos:
         if VERBOSE:
