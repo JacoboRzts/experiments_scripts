@@ -591,6 +591,11 @@ def main():
     else:
         info(f"Creating topology {args.topology.upper()}\n")
 
+    if args.dry_run:
+        COOLDOWN = 0
+        DURATION = 0
+        RATE_PAUSE = 0
+
     net = create_network(args.topology, args.controller)
 
     try:
