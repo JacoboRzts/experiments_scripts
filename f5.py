@@ -121,13 +121,6 @@ def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool)
     num_senders = len(escenario_cfg["tcp_senders"])
     puertos = [5201 + i for i in range(num_senders)]
 
-    # Start TCP servers.
-    # NOTA: no usar -D/--daemon aqui. run_bg() ya lanza el proceso de forma
-    # asincrona via host.popen() (API de Mininet), asi que el servidor no
-    # necesita daemonizarse a si mismo. Ademas, en versiones recientes de
-    # iperf3 el flag corto -D fue reasignado a --bidir (solo valido en el
-    # cliente), lo que provoca "parameter error - some option you are
-    # trying to set is client only" si se usa en el servidor.
     for p in puertos:
         if VERBOSE:
             info(f"Starting TCP server on {rx_tcp} port {p}\n")
@@ -175,10 +168,10 @@ def stop_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool):
     hosts = {escenario_cfg["tcp_receptor"], escenario_cfg["udp_receptor"]}
     for h in hosts:
         executor.kill_iperf(h)
+        time.sleep(1)
 
 
-def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
-                 results: dict, errors: list, dry_run: bool):
+def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, results: dict, errors: list, dry_run: bool):
     """Run TCP iperf3 flow from sender to receiver"""
     if dry_run:
         results[sender] = {
@@ -187,10 +180,6 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         }
         return
 
-    # -c ya se especifico al inicio del comando (host destino). No repetir
-    # -c al final: al no llevar argumento, iperf3 consume el siguiente
-    # token ("-J") como si fuera el host, perdiendo la salida JSON y
-    # rompiendo el parseo posterior con json.loads().
     ip_origen = HOSTS[sender]["ip"]
     cmd = (
         f"iperf3 -c {rx_ip} -p {port}"
@@ -230,8 +219,7 @@ def run_tcp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         executor.kill_iperf(sender)
 
 
-def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
-                 results: dict, errors: list, dry_run: bool):
+def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int, results: dict, errors: list, dry_run: bool):
     """Run UDP iperf3 flow from sender to receiver"""
     if dry_run:
         results[sender] = {
@@ -240,15 +228,14 @@ def run_udp_flow(executor: MininetExecutor, sender: str, rx_ip: str, port: int,
         }
         return
 
-    # Mismo fix que en run_tcp_flow: no repetir -c al final del comando.
     ip_origen = HOSTS[sender]["ip"]
     cmd = (
         f"iperf3 -c {rx_ip} -p {port} -u"
-        f" -b {UDP_RATE}"
+        f" -b {UDP_RATE}M"
         f" -l {UDP_PAYLOAD}"
         f" -t {DURATION}"
         f" --bind {ip_origen}"
-        f" -J"
+        f" -J  2>/dev/null"
     )
 
     try:
