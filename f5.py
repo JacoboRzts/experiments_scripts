@@ -122,7 +122,6 @@ def start_servers(executor: MininetExecutor, escenario_cfg: dict, dry_run: bool)
     executor.kill_iperf(rx_tcp)
     time.sleep(2)
 
-
     for p in puertos:
         if VERBOSE:
             info(f"Starting TCP server on {rx_tcp} port {p}\n")
@@ -443,6 +442,7 @@ def run_scenario(executor: MininetExecutor, topology: str, esc: str,
         reps_hechas = rep
 
         if dry_run:
+            print(f"\r  Rep {rep:02d}/{REPS_MAX} OK (dry-run)")
             break
 
         if not m["ok"]:
@@ -592,11 +592,6 @@ def main():
         info("Creating network...\n")
     else:
         info(f"Creating topology {args.topology.upper()}\n")
-
-    if args.dry_run:
-        COOLDOWN = 0
-        DURATION = 0
-        RATE_PAUSE = 0
 
     net = create_network(args.topology, args.controller)
 
