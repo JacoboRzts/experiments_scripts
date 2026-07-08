@@ -83,7 +83,7 @@ class MininetExecutor:
                 # de fork() entre threads; una vez creado, corre en
                 # paralelo real (communicate() queda fuera del lock).
                 with self._popen_lock:
-                    proc = host.popen(cmd, shell=True, close_fds=True)
+                    proc = host.popen(['/bin/bash', '-c', cmd], close_fds=True)
                 try:
                     stdout, stderr = proc.communicate(timeout=timeout)
                     returncode = proc.returncode
@@ -135,12 +135,7 @@ class MininetExecutor:
         # descriptor".
         try:
             with self._popen_lock:
-                proc = host.popen(
-                    cmd, shell=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    close_fds=True,
-                )
+                proc = host.popen(['/bin/bash', '-c', cmd], close_fds=True)
             self.processes.append(proc)
             return proc
         except KeyError as e:
