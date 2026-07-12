@@ -22,11 +22,11 @@ class SpineLeaf(Topo):
         super(SpineLeaf, self).__init__(**opts)
         spines = []
         leafs = []
-
+        # Add spine switches
         for i in range(1, n_spine + 1):
             spine = self.addSwitch(f's{i}', protocols='OpenFlow13', dpid=NODES[i-1])
             spines.append(spine)
-
+        # Add leaf switches
         for j in range(1, n_leaf + 1):
             leaf = self.addSwitch(f's{j+n_spine}', protocols='OpenFlow13', dpid=NODES[j+1])
             leafs.append(leaf)
@@ -34,7 +34,7 @@ class SpineLeaf(Topo):
                 self.addLink(leaf, spine,
                             port1=spine_idx,
                             port2=j + 1, bw=BANDWIDTH, delay=DELAY)
-
+            # add host to all switches
             for k in range(1, n_host + 1):
                 host_id = (j-1) * n_host + k
                 ip = f"10.0.{j}.{k}/16"
@@ -47,10 +47,10 @@ class FatTree(Topo):
         core_list = []
         aggr_list = []
         edge_list = []
-
+        # add core switches
         for i in range(n_core):
             core_list.append(self.addSwitch(f"s{i + 1}", protocol='OpenFlow13'))
-
+        # add aggregation switches
         for j in range(n_aggr):
             aggr = self.addSwitch(f"s{n_core + j + 1}", protocol='OpenFlow13')
             aggr_list.append(aggr)
@@ -61,6 +61,7 @@ class FatTree(Topo):
                     port2=j + 2,
                     bw=BANDWIDTH, delay=DELAY
                 )
+        # add edge switches
         for k in range(n_edge):
             edge = self.addSwitch(f"s{n_core + n_aggr + k + 1}", protocol='OpenFlow13')
             edge_list.append(edge)
@@ -72,7 +73,7 @@ class FatTree(Topo):
                 port2=3,
                 bw=BANDWIDTH, delay=DELAY
             )
-
+            # add hosts
             for i in range(1, n_host + 1):
                 ip = f'10.0.{k + 1}.{i}/16'
                 host_id = k * n_host + i
