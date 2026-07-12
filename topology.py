@@ -92,10 +92,19 @@ def main():
         case _:
             print(f"Topology {args.topology} don't exists.")
             return 0
-    controller = RemoteController('odl', ip="172.17.0.2", port=6653)
-    net = Mininet(topo=topo, link=TCLink, switch=OVSSwitch, controller=controller)
-    net.start()
-    CLI(net)
+
+    try:
+        controller = RemoteController('odl', ip="172.17.0.2", port=6653)
+        net = Mininet(topo=topo, link=TCLink, switch=OVSSwitch, controller=controller)
+        net.start()
+        CLI(net)
+    except KeyboardInterrupt:
+        print("\nInterrupted by user\n")
+    except Exception as e:
+        print(f"ERROR: {e}")
+    finally:
+        print("Stopping the network...\n")
+        net.stop()
 
 if __name__ == "__main__":
     main()
