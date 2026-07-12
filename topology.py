@@ -31,9 +31,7 @@ class SpineLeaf(Topo):
             leaf = self.addSwitch(f's{j+n_spine}', protocols='OpenFlow13', dpid=NODES[j+1])
             leafs.append(leaf)
             for spine_idx, spine in enumerate(spines, start=2):
-                self.addLink(leaf, spine,
-                            port1=spine_idx,
-                            port2=j + 1, bw=BANDWIDTH, delay=DELAY)
+                self.addLink(leaf, spine, port1=spine_idx, port2=j + 1, bw=BANDWIDTH, delay=DELAY)
             # add host to all switches
             for k in range(1, n_host + 1):
                 host_id = (j-1) * n_host + k
@@ -47,47 +45,30 @@ class FatTree(Topo):
         core_list = []
         aggr_list = []
         edge_list = []
+        node_idx = 0
         # add core switches
         for i in range(n_core):
-            core_list.append(self.addSwitch(f"s{i + 1}", protocol='OpenFlow13'))
+            core_list.append(self.addSwitch(f"s{i + 1}", protocol='OpenFlow13', dpid=NODES[node_idx]))
         # add aggregation switches
         for j in range(n_aggr):
-            aggr = self.addSwitch(f"s{n_core + j + 1}", protocol='OpenFlow13')
+            aggr = self.addSwitch(f"s{n_core + j + 1}", protocol='OpenFlow13', dpid=NODES[node_idx])
             aggr_list.append(aggr)
             for idx, core in enumerate(core_list):
-                self.addLink(
-                    aggr, core,
-                    port1=2,
-                    port2=j + 2,
-                    bw=BANDWIDTH, delay=DELAY
-                )
+                self.addLink(aggr, core, port1=2, port2=j + 2, bw=BANDWIDTH, delay=DELAY)
         # add edge switches
         for k in range(n_edge):
-            edge = self.addSwitch(f"s{n_core + n_aggr + k + 1}", protocol='OpenFlow13')
+            edge = self.addSwitch(f"s{n_core + n_aggr + k + 1}", protocol='OpenFlow13', dpid=NODES[node_idx])
             edge_list.append(edge)
             idx = k % len(aggr_list)
             aggr = aggr_list[idx]
-            self.addLink(
-                edge, aggr,
-                port1=2,
-                port2=3,
-                bw=BANDWIDTH, delay=DELAY
-            )
+            self.addLink(edge, aggr, port1=2, port2=3, bw=BANDWIDTH, delay=DELAY)
             # add hosts
             for i in range(1, n_host + 1):
                 ip = f'10.0.{k + 1}.{i}/16'
                 host_id = k * n_host + i
                 host = self.addHost(f"h{host_id}", ip=ip)
-                self.addLink(
-                    host, edge,
-                    port2=12 + i,
-                    bw=BANDWIDTH, delay=DELAY
-                )
+                self.addLink(host, edge, port2=12 + i, bw=BANDWIDTH, delay=DELAY)
         edge = edge_list[-1]
-
-        for i in range(1, 3):
-            host = self.addHost(f"h{i+8}", ip=f"10.0.2.{i+4}/16")
-            self.addLink(host, edge, port2=16+i, bw=BANDWIDTH, delay=DELAY)
 
 def main():
     import argparse
