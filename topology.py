@@ -49,15 +49,18 @@ class FatTree(Topo):
         # add core switches
         for i in range(n_core):
             core_list.append(self.addSwitch(f"s{i + 1}", protocol='OpenFlow13', dpid=NODES[node_idx]))
+            node_idx += 1
         # add aggregation switches
         for j in range(n_aggr):
             aggr = self.addSwitch(f"s{n_core + j + 1}", protocol='OpenFlow13', dpid=NODES[node_idx])
+            node_idx += 1
             aggr_list.append(aggr)
             for idx, core in enumerate(core_list):
                 self.addLink(aggr, core, port1=2, port2=j + 2, bw=BANDWIDTH, delay=DELAY)
         # add edge switches
         for k in range(n_edge):
             edge = self.addSwitch(f"s{n_core + n_aggr + k + 1}", protocol='OpenFlow13', dpid=NODES[node_idx])
+            node_idx += 1
             edge_list.append(edge)
             idx = k % len(aggr_list)
             aggr = aggr_list[idx]
