@@ -78,6 +78,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Define a topology in mininet.")
     parser.add_argument("-t", "--topology", type=str, default='sl',  help="Topology to test (Spine-leaf by default)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print DPID of the switches created")
     args = parser.parse_args()
 
     match args.topology:
@@ -93,6 +94,9 @@ def main():
         controller = RemoteController('odl', ip="172.17.0.2", port=6653)
         net = Mininet(topo=topo, link=TCLink, switch=OVSSwitch, controller=controller)
         net.start()
+        if args.verbose:
+            for switch in net.switches:
+                print(f"Switch {switch.name} created with DPID {int(switch.dpid, 16)}")
         CLI(net)
     except KeyboardInterrupt:
         print("\nInterrupted by user\n")
