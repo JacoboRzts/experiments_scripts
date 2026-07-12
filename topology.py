@@ -13,26 +13,33 @@ NODES = [
     "A9460D5E0EC80",
 ]
 
+# CONFIGURATIONS
+BANDWIDTH = 1000
+DELAY = '1ms'
+
 class SpineLeaf(Topo):
     def __init__(self, n_spine=2, n_leaf=3, n_host=3, **opts):
         super(SpineLeaf, self).__init__(**opts)
         spines = []
         leafs = []
+
         for i in range(1, n_spine + 1):
             spine = self.addSwitch(f's{i}', protocols='OpenFlow13', dpid=NODES[i-1])
             spines.append(spine)
+
         for j in range(1, n_leaf + 1):
             leaf = self.addSwitch(f's{j+n_spine}', protocols='OpenFlow13', dpid=NODES[j+1])
             leafs.append(leaf)
             for spine_idx, spine in enumerate(spines, start=2):
                 self.addLink(leaf, spine,
                             port1=spine_idx,
-                            port2=j + 1, bw=1000, delay='1ms')
+                            port2=j + 1, bw=BANDWIDTH, delay=DELAY)
+
             for k in range(1, n_host + 1):
                 host_id = (j-1) * n_host + k
                 ip = f"10.0.{j}.{k}/16"
                 host = self.addHost(f'h{host_id}', ip=ip)
-                self.addLink(host, leaf, port2=k+12, bw=1000, delay='1ms')
+                self.addLink(host, leaf, port2=k+12, bw=BANDWIDTH, delay=DELAY)
 
 class FatTree(Topo):
     def __init__(self, n_core: int = 1, n_aggr: int = 2, n_edge: int = 2, n_host: int = 4, **opts):
@@ -40,8 +47,10 @@ class FatTree(Topo):
         core_list = []
         aggr_list = []
         edge_list = []
-        for i in range(1, n_core + 1):
-            core_list.append(self.addSwitch(f"s{i}", protocol='OpenFlow13'))
+
+        for i in range(n_core):
+            core_list.append(self.addSwitch(f"s{i + 1}", protocol='OpenFlow13'))
+
         for j in range(n_aggr):
             aggr = self.addSwitch(f"s{n_core + j + 1}", protocol='OpenFlow13')
             aggr_list.append(aggr)
@@ -50,7 +59,7 @@ class FatTree(Topo):
                     aggr, core,
                     port1=2,
                     port2=j + 2,
-                    bw=1000, delay='1ms'
+                    bw=BANDWIDTH, delay=DELAY
                 )
         for k in range(n_edge):
             edge = self.addSwitch(f"s{n_core + n_aggr + k + 1}", protocol='OpenFlow13')
@@ -61,8 +70,9 @@ class FatTree(Topo):
                 edge, aggr,
                 port1=2,
                 port2=3,
-                bw=1000, delay='1ms'
+                bw=BANDWIDTH, delay=DELAY
             )
+
             for i in range(1, n_host + 1):
                 ip = f'10.0.{k + 1}.{i}/16'
                 host_id = k * n_host + i
@@ -70,18 +80,19 @@ class FatTree(Topo):
                 self.addLink(
                     host, edge,
                     port2=12 + i,
-                    bw=1000, delay='1ms'
+                    bw=BANDWIDTH, delay=DELAY
                 )
         edge = edge_list[-1]
+
         for i in range(1, 3):
             host = self.addHost(f"h{i+8}", ip=f"10.0.2.{i+4}/16")
-            self.addLink(host, edge, port2=16+i, bw=1000, delay='1ms')
+            self.addLink(host, edge, port2=16+i, bw=BANDWIDTH, delay=DELAY)
 
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Define a topology in mininet.")
-    parser.add_argument("-t", "--topology", type=str, default='sl', help="Topology to test")
+    parser.add_argument("-t", "--topology", type=str, default='sl',  help="Topology to test (Spine-leaf by default)")
     args = parser.parse_args()
 
     match args.topology:
