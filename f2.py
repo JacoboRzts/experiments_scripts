@@ -1,7 +1,7 @@
-
 #!/usr/bin/env python3
 """
-FASE 2 - Mininet Version
+FASE 2 - Mininet API Version
+Usa Mininet en lugar de SSH para ejecutar experimentos
 """
 
 import argparse
@@ -13,6 +13,13 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from mininet.net import Mininet
+from mininet.node import RemoteController, OVSSwitch
+from mininet.link import TCLink
+from mininet.cli import CLI
+
+from topology import SpineLeaf, FatTree
 
 # CONFIGURACIÓN GLOBAL
 EXPERIMENT_BASE = "f2"
@@ -28,15 +35,12 @@ REPS_MAX = 30
 # Carga fija para evitar saturación (50-100 Mbps)
 MAIN_RATE_MBPS = 50    # Flujo de fondo
 PROBE_RATE_MBPS = 50   # Flujo que mide RTT
-# Total: 100 Mbps (bien dentro del rango 50-100 Mbps)
 
 # Tamaños de paquete: 6 tamaños como en F1
 PKT_SIZES = [64, 128, 256, 512, 1024, 1518]
 
 OUTPUT_BASE = Path.home() / "experimentos"
 
-# Escenarios: S1 (2 flows) y S2 (4 flows)
-# TODOS los flujos van al mismo receptor H5 (SL y j3c)
 SCENARIOS = {
     "s1": {
         "id": "s1",
@@ -44,11 +48,11 @@ SCENARIOS = {
             "sl": "H1 (main) + H4 (probe) → H5 — 2 flows, mismo destino",
             "j3c": "H1 (main) + H4 (probe) → H5 — 2 flows, mismo destino"
         },
-        "main_host": "H1",
-        "probe_host": "H4",
+        "main_host": "h1",
+        "probe_host": "h4",
         "target_host": {
-            "sl": "H5", 
-            "j3c": "H5"
+            "sl": "h5", 
+            "j3c": "h5"
         },
         "extra_hosts": [],
         "main_port": 5201,
@@ -59,26 +63,26 @@ SCENARIOS = {
     "s2": {
         "id": "s2",
         "desc": {
-            "sl": "H1+H2 (Leaf1) + H7 (Leaf3) → H5 — 4 flows, mismo destino, 2 leafs origen",
-            "j3c": "H1+H2+H3 (Edge1) → H5 — 4 flows, mismo destino"
+            "sl": "h1+h2 (Leaf1) + h7 (Leaf3) → h5 — 4 flows, mismo destino, 2 leafs origen",
+            "j3c": "h1+h2+h3 (Edge1) → h5 — 4 flows, mismo destino"
         },
-        "main_host": "H1",
-        "probe_host": "H4",
+        "main_host": "h1",
+        "probe_host": "h4",
         "target_host": {
-            "sl": "H5",
-            "j3c": "H5"
+            "sl": "h5",
+            "j3c": "h5"
         },
         "extra_hosts": {
-            "sl": ["H2", "H7"],
-            "j3c": ["H2", "H3"]
+            "sl": ["h2", "h7"],
+            "j3c": ["h2", "h3"]
         },
         "main_port": 5201,
         "probe_port": 5202,
         "extra_ports": [5203, 5204],
         "extra_targets": {
             "sl": {
-                "H2": "H5",
-                "H7": "H5"
+                "h2": "h5",
+                "h7": "h5"
             }
         },
     }
@@ -98,25 +102,25 @@ def warn(msg): print(f" {C.WARN}WARN{C.END}  {msg}")
 def fail(msg): print(f" {C.FAIL}FAIL{C.END}  {msg}")
 def info(msg): print(f" INFO  {msg}")
 
-# SSH
-def ssh_run(host_key, cmd, timeout=90):
-    h = HOSTS[host_key]
-    return subprocess.run(
-        _SSH_OPTS + [f"{h['user']}@{h['ip']}", cmd],
-        capture_output=True, text=True, timeout=timeout,
-    )
+# Mininet API
+def mn_run(host, cmd, timeout=90):
+    """Ejecuta un comando en un host usando Mininet API"""
+    try:
+        result = host.cmd(f"timeout {timeout} {cmd}")
+        return result, 0
+    except Exception as e:
+        return str(e), 1
 
-def ssh_bg(host_key, cmd):
-    h = HOSTS[host_key]
-    subprocess.Popen(
-        _SSH_OPTS + [f"{h['user']}@{h['ip']}", f"nohup {cmd} >/dev/null 2>&1 &"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+def mn_bg(host, cmd):
+    """Ejecuta un comando en background en un host"""
+    host.cmd(f"{cmd} &")
 
-def kill_iperf(host_key):
-    ssh_run(host_key, "pkill -9 iperf3 2>/dev/null; true", timeout=8)
+def kill_iperf(host):
+    """Mata procesos iperf3 en un host"""
+    host.cmd("pkill -9 iperf3 2>/dev/null; true")
 
 def kill_iperf_all(hosts):
+    """Mata iperf3 en todos los hosts"""
     for h in hosts:
         kill_iperf(h)
 
@@ -142,41 +146,38 @@ def nombre_archivo(topology, scenario, pkt_size, rep):
         f"_rep{rep:02d}.json"
     )
 
-# ============================================================
 # SERVIDORES
-# ============================================================
-def start_iperf_servers(dry_run):
+def start_iperf_servers(net, dry_run):
     if dry_run:
         return
     
-    target = SCENARIO["target_host"]
+    target_name = SCENARIO["target_host"]
+    target = net.get(target_name)
 
-    # Clean iperf3 process before start the new servers on target
     kill_iperf(target)
     time.sleep(0.5)
     
-    # Servidor para main flow
-    ssh_bg(target, f"iperf3 -s -p {SCENARIO['main_port']}")
+    mn_bg(target, f"iperf3 -s -p {SCENARIO['main_port']}")
+    mn_bg(target, f"iperf3 -s -p {SCENARIO['probe_port']}")
     
-    # Servidor para probe flow
-    ssh_bg(target, f"iperf3 -s -p {SCENARIO['probe_port']}")
-    
-    # Servidores para extra flows
     for port in SCENARIO["extra_ports"]:
-        ssh_bg(target, f"iperf3 -s -p {port}")
+        mn_bg(target, f"iperf3 -s -p {port}")
     
     time.sleep(2)
-    ok(f"Servidores activos en {target}")
+    
+    # Verificar que los servidores estén escuchando
+    stdout, rc = mn_run(target, "ss -tlnp | grep iperf3", timeout=5)
+    print(f"    Servidores activos:\n{stdout}")
+    
+    ok(f"Servidores activos en {target_name}")
 
-def stop_iperf_servers(dry_run):
+def stop_iperf_servers(net, dry_run):
+    """Detiene servidores iperf3"""
     if not dry_run:
-        kill_iperf(SCENARIO["target_host"])
+        kill_iperf(net.get(SCENARIO["target_host"]))
 
-# ============================================================
 # FLUJOS IPERF3
-# ============================================================
-
-def run_main_flow(pkt_size, results, errors, dry_run):
+def run_main_flow(net, pkt_size, results, errors, dry_run):
     """
     Flujo main (fondo) con carga fija de MAIN_RATE_MBPS
     """
@@ -185,21 +186,22 @@ def run_main_flow(pkt_size, results, errors, dry_run):
         results["mean_rtt_ms"] = 2.5
         return
     
-    ip_target = HOSTS[SCENARIO["target_host"]]["ip"]
+    host = net.get(SCENARIO["main_host"])
+    target_ip = net.get(SCENARIO["target_host"]).IP()
     cmd = (
-        f"iperf3 -c {ip_target} -p {SCENARIO['main_port']}"
+        f"iperf3 -c {target_ip} -p {SCENARIO['main_port']}"
         f" -t {DURATION} -b {MAIN_RATE_MBPS}M -C cubic -l {pkt_size} -J"
     )
     
     try:
-        res = ssh_run(SCENARIO["main_host"], cmd, timeout=DURATION + 20)
-        if res.returncode != 0 or not res.stdout.strip():
-            errors.append(f"main flow rc={res.returncode}")
+        stdout, returncode = mn_run(host, cmd, timeout=DURATION + 20)
+        if returncode != 0 or not stdout.strip():
+            errors.append(f"main flow rc={returncode}")
             results["throughput_mbps"] = None
             results["mean_rtt_ms"] = None
             return
         
-        data = json.loads(res.stdout)
+        data = json.loads(stdout)
         end = data.get("end", {})
         
         # Throughput
@@ -216,47 +218,76 @@ def run_main_flow(pkt_size, results, errors, dry_run):
         results["throughput_mbps"] = None
         results["mean_rtt_ms"] = None
 
-def run_probe_flow(pkt_size, results, errors, dry_run):
-    """
-    Flujo probe (mide RTT) con carga fija de PROBE_RATE_MBPS
-    """
+def run_probe_flow(net, pkt_size, results, errors, dry_run):
     if dry_run:
         results["throughput_mbps"] = PROBE_RATE_MBPS * 0.98
         results["mean_rtt_ms"] = 2.5
         return
     
-    ip_target = HOSTS[SCENARIO["target_host"]]["ip"]
+    host = net.get(SCENARIO["probe_host"])
+    target_ip = net.get(SCENARIO["target_host"]).IP()
     cmd = (
-        f"iperf3 -c {ip_target} -p {SCENARIO['probe_port']}"
+        f"iperf3 -c {target_ip} -p {SCENARIO['probe_port']}"
         f" -t {DURATION} -b {PROBE_RATE_MBPS}M -C cubic -l {pkt_size} -J"
     )
     
     try:
-        res = ssh_run(SCENARIO["probe_host"], cmd, timeout=DURATION + 20)
-        if res.returncode != 0 or not res.stdout.strip():
-            errors.append(f"probe rc={res.returncode}")
+        stdout, returncode = mn_run(host, cmd, timeout=DURATION + 20)
+        
+        # DEBUG: Imprimir salida para ver qué está pasando
+        if returncode != 0:
+            print(f"\n    DEBUG probe: returncode={returncode}, stdout={stdout[:200]}")
+            errors.append(f"probe rc={returncode}")
             results["throughput_mbps"] = None
             results["mean_rtt_ms"] = None
             return
         
-        data = json.loads(res.stdout)
+        if not stdout.strip():
+            print("\n    DEBUG probe: stdout vacío")
+            errors.append("probe stdout vacío")
+            results["throughput_mbps"] = None
+            results["mean_rtt_ms"] = None
+            return
+        
+        # DEBUG: Ver estructura del JSON
+        try:
+            data = json.loads(stdout)
+            print(f"\n    DEBUG probe: JSON parseado correctamente")
+            print(f"    DEBUG: keys en end = {data.get('end', {}).keys()}")
+            streams = data.get("end", {}).get("streams", [])
+            if streams:
+                print(f"    DEBUG: {len(streams)} streams, primer stream keys = {streams[0].keys()}")
+            else:
+                print("    DEBUG: No hay streams en la respuesta")
+        except json.JSONDecodeError as e:
+            print(f"\n    DEBUG probe: Error JSON: {e}")
+            print(f"    DEBUG: stdout={stdout[:200]}")
+            errors.append(f"probe JSON error: {e}")
+            results["throughput_mbps"] = None
+            results["mean_rtt_ms"] = None
+            return
+        
+        data = json.loads(stdout)
         end = data.get("end", {})
         
-        # Throughput
         bps = end.get("sum_sent", {}).get("bits_per_second", 0)
         results["throughput_mbps"] = round(bps / 1e6, 2)
         
-        # RTT: extraer mean_rtt de los streams
         streams = end.get("streams", [])
         rtts = [s.get("rtt_ms") for s in streams if s.get("rtt_ms") is not None]
         results["mean_rtt_ms"] = round(statistics.mean(rtts), 3) if rtts else None
         
+        # DEBUG: Mostrar resultado
+        if results["mean_rtt_ms"] is None:
+            print(f"\n    DEBUG probe: No se encontraron RTTs en {len(streams)} streams")
+        
     except Exception as e:
+        print(f"\n    DEBUG probe: Excepción: {e}")
         errors.append(f"probe: {e}")
         results["throughput_mbps"] = None
         results["mean_rtt_ms"] = None
 
-def run_extra_flow(host_key, port, pkt_size, results, errors, dry_run):
+def run_extra_flow(net, host_key, port, pkt_size, results, errors, dry_run):
     """
     Flujo extra (fondo) con carga fija de MAIN_RATE_MBPS
     """
@@ -267,23 +298,25 @@ def run_extra_flow(host_key, port, pkt_size, results, errors, dry_run):
     
     # Determinar destino (balanceo manual si existe)
     extra_targets = SCENARIO.get("extra_targets", {}).get(TOPOLOGY, {})
-    target_host = extra_targets.get(host_key, SCENARIO["target_host"])
-    ip_target = HOSTS[target_host]["ip"]
+    target_name = extra_targets.get(host_key, SCENARIO["target_host"])
+    
+    host = net.get(host_key)
+    target_ip = net.get(target_name).IP()
     
     cmd = (
-        f"iperf3 -c {ip_target} -p {port}"
+        f"iperf3 -c {target_ip} -p {port}"
         f" -t {DURATION} -b {MAIN_RATE_MBPS}M -C cubic -l {pkt_size} -J"
     )
     
     try:
-        res = ssh_run(host_key, cmd, timeout=DURATION + 20)
-        if res.returncode != 0 or not res.stdout.strip():
-            errors.append(f"{host_key} extra rc={res.returncode}")
+        stdout, returncode = mn_run(host, cmd, timeout=DURATION + 20)
+        if returncode != 0 or not stdout.strip():
+            errors.append(f"{host_key} extra rc={returncode}")
             results["throughput_mbps"] = None
             results["mean_rtt_ms"] = None
             return
         
-        data = json.loads(res.stdout)
+        data = json.loads(stdout)
         end = data.get("end", {})
         
         bps = end.get("sum_sent", {}).get("bits_per_second", 0)
@@ -298,11 +331,8 @@ def run_extra_flow(host_key, port, pkt_size, results, errors, dry_run):
         results["throughput_mbps"] = None
         results["mean_rtt_ms"] = None
 
-# ============================================================
 # LOOP PRINCIPAL
-# ============================================================
-
-def run_protocol(topology, scenario, pkt_size, out_dir, dry_run):
+def run_protocol(net, topology, scenario, pkt_size, out_dir, dry_run):
     print(f"\n  {C.BOLD}── PKT {pkt_size}B ──{C.END}")
     
     rtts = []
@@ -329,9 +359,9 @@ def run_protocol(topology, scenario, pkt_size, out_dir, dry_run):
         
         threads = [
             threading.Thread(target=run_main_flow,
-                             args=(pkt_size, res_main, err_main, dry_run)),
+                             args=(net, pkt_size, res_main, err_main, dry_run)),
             threading.Thread(target=run_probe_flow,
-                             args=(pkt_size, res_probe, err_probe, dry_run)),
+                             args=(net, pkt_size, res_probe, err_probe, dry_run)),
         ]
         
         # Extra flows (S2)
@@ -342,7 +372,7 @@ def run_protocol(topology, scenario, pkt_size, out_dir, dry_run):
                 res = {}; err = []
                 threads.append(threading.Thread(
                     target=run_extra_flow,
-                    args=(host, SCENARIO["extra_ports"][i], pkt_size, res, err, dry_run)
+                    args=(net, host, SCENARIO["extra_ports"][i], pkt_size, res, err, dry_run)
                 ))
                 extra_results.append(res)
                 extra_errors.append(err)
@@ -416,11 +446,8 @@ def run_protocol(topology, scenario, pkt_size, out_dir, dry_run):
         "rsd_pct": round(compute_rsd(rtts), 2) if rtts else None,
     }
 
-# ============================================================
 # EXPERIMENTO COMPLETO
-# ============================================================
-
-def run_experiment(topology, scenario, dry_run):
+def run_experiment(net, topology, scenario, dry_run):
     out_dir = OUTPUT_BASE / topology / "fase2_latency"
     out_dir.mkdir(parents=True, exist_ok=True)
     
@@ -444,10 +471,11 @@ def run_experiment(topology, scenario, dry_run):
         all_hosts += SCENARIO["extra_hosts"] if isinstance(SCENARIO["extra_hosts"], list) else []
         all_ok = True
         for name in set(all_hosts):
-            res = ssh_run(name, "iperf3 --version 2>&1 | head -1", timeout=10)
-            ok_flag = res.returncode == 0
-            ver = res.stdout.strip()[:40] if ok_flag else "no encontrado"
-            print(f"  {'OK' if ok_flag else 'FAIL'} {name}  {HOSTS[name]['ip']}  {ver}")
+            host = net.get(name)
+            stdout, rc = mn_run(host, "iperf3 --version 2>&1 | head -1", timeout=10)
+            ok_flag = rc == 0
+            ver = stdout.strip()[:40] if ok_flag else "no encontrado"
+            print(f"  {'OK' if ok_flag else 'FAIL'} {name}  {host.IP()}  {ver}")
             if not ok_flag:
                 all_ok = False
         if not all_ok:
@@ -455,16 +483,16 @@ def run_experiment(topology, scenario, dry_run):
             sys.exit(1)
         print()
     
-    start_iperf_servers(topology, dry_run)
+    start_iperf_servers(net, dry_run)
     
     all_results = []
     for i, pkt_size in enumerate(PKT_SIZES):
-        result = run_protocol(topology, scenario, pkt_size, out_dir, dry_run)
+        result = run_protocol(net, topology, scenario, pkt_size, out_dir, dry_run)
         all_results.append(result)
         if i < len(PKT_SIZES) - 1 and not dry_run:
             time.sleep(PKT_PAUSE)
     
-    stop_iperf_servers(topology, dry_run)
+    stop_iperf_servers(net, dry_run)
     
     # Resumen
     print(f"\n\n{'='*70}")
@@ -497,62 +525,80 @@ def run_experiment(topology, scenario, dry_run):
     }, indent=2))
     ok(f"Summary: {summary_path}")
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
+def create_mininet_network(topology_type):
+    """Crea y retorna la red Mininet según la topología especificada"""
+    if topology_type == "sl":
+        topo = SpineLeaf()
+    elif topology_type == "j3c":
+        topo = FatTree(n_core=1, n_aggr=2, n_edge=2, n_host=4)
+    else:
+        raise ValueError(f"Topología {topology_type} no soportada")
+    
+    try:
+        controller = RemoteController('odl', ip="172.17.0.2", port=6653)
+        net = Mininet(topo=topo, link=TCLink, switch=OVSSwitch, controller=controller)
+        net.start()
+        return net
+    except Exception as e:
+        print(f"ERROR al iniciar la red: {e}")
+        sys.exit(1)
 
+# Main
 def main():
-    parser = argparse.ArgumentParser(
-        description="Fase 2 adaptado a Mininet."
-    )
-    parser.add_argument(
-        '-e',
-        "--escenario",
-        choices=["s1", "s2", "all"],
-        default="all",
-        help="Escenario: s1 (2 flows) o s2 (4 flows)"
-    )
-    parser.add_argument(
-        '-t',
-        "--topology",
-        choices=["sl", "j3c"],
-        default="sl",
-        help="Topología: sl (spine-leaf) o j3c (jerárquica 3 capas)"
-    )
+    parser = argparse.ArgumentParser(description="Fase 2 adaptado a Mininet API.")
+    parser.add_argument('-s', "--scenario", choices=["s1", "s2", "all"], default="all", help="Escenario: s1 (2 flows) o s2 (4 flows)")
+    parser.add_argument('-t', "--topology", choices=["sl", "j3c"], default="sl", help="Topología: sl (spine-leaf) o j3c (jerárquica 3 capas)")
     parser.add_argument("-d", "--dry-run", action="store_true")
-    parser.add_argument("-s", "--skip-preflight", action="store_true")
+    parser.add_argument("-p", "--skip-preflight", action="store_true")
     args = parser.parse_args()
     
-    global HOSTS, SCENARIO, TOPOLOGY
+    global TOPOLOGY, SCENARIO
+    
     TOPOLOGY = args.topology
     
-    HOSTS = TOPOLOGIES[args.topology]["hosts"]
+    # Iniciar la red de Mininet
+    print(f"Iniciando red con topología {TOPOLOGY}...")
+    net = create_mininet_network(TOPOLOGY)
     
-    if args.scenario == "all":
-        scenarios = ["s1", "s2"]
-    else:
-        scenarios = [args.scenario]
-    
-    for sc in scenarios:
-        sc_cfg = SCENARIOS[sc]
-        SCENARIO = {
-            "id": sc_cfg["id"],
-            "desc": sc_cfg["desc"],
-            "main_host": sc_cfg["main_host"],
-            "probe_host": sc_cfg["probe_host"],
-            "target_host": sc_cfg["target_host"][args.topology],
-            "extra_hosts": sc_cfg["extra_hosts"].get(args.topology, []) if isinstance(sc_cfg["extra_hosts"], dict) else sc_cfg["extra_hosts"],
-            "main_port": sc_cfg["main_port"],
-            "probe_port": sc_cfg["probe_port"],
-            "extra_ports": sc_cfg["extra_ports"],
-            "extra_targets": sc_cfg.get("extra_targets", {}),
-        }
+    try:
+        if args.scenario == "all":
+            scenarios = ["s1", "s2"]
+        else:
+            scenarios = [args.scenario]
         
-        run_experiment(
-            topology=args.topology,
-            scenario=sc,
-            dry_run=args.dry_run
-        )
+        for sc in scenarios:
+            sc_cfg = SCENARIOS[sc]
+            SCENARIO = {
+                "id": sc_cfg["id"],
+                "desc": sc_cfg["desc"],
+                "main_host": sc_cfg["main_host"],
+                "probe_host": sc_cfg["probe_host"],
+                "target_host": sc_cfg["target_host"][args.topology],
+                "extra_hosts": sc_cfg["extra_hosts"].get(args.topology, []) if isinstance(sc_cfg["extra_hosts"], dict) else sc_cfg["extra_hosts"],
+                "main_port": sc_cfg["main_port"],
+                "probe_port": sc_cfg["probe_port"],
+                "extra_ports": sc_cfg["extra_ports"],
+                "extra_targets": sc_cfg.get("extra_targets", {}),
+            }
+            
+            run_experiment(
+                net=net,
+                topology=args.topology,
+                scenario=sc,
+                dry_run=args.dry_run
+            )
+            
+            # Pausa entre escenarios
+            if sc != scenarios[-1]:
+                print("\n--- Pausa entre escenarios ---\n")
+                time.sleep(5)
+    
+    except KeyboardInterrupt:
+        print("\nInterrumpido por el usuario")
+    finally:
+        print("\nDeteniendo la red...")
+        net.stop()
+        print("Red detenida")
 
 if __name__ == "__main__":
     main()
