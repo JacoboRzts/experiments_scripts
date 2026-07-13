@@ -119,12 +119,10 @@ def run_single_pair(executor: MininetExecutor, pair: dict, pkt_size: int,
 
     try:
         res = executor.run_cmd(pair["client"], cmd, timeout=DURATION + 20)
-
         if res.returncode != 0 or not res.stdout.strip():
             errors.append(f"{pair['id']}: iperf3 rc={res.returncode}, stderr={res.stderr}")
             results[pair["id"]] = None
             return
-
         try:
             data = json.loads(res.stdout)
         except json.JSONDecodeError as e:
@@ -133,7 +131,6 @@ def run_single_pair(executor: MininetExecutor, pair: dict, pkt_size: int,
                 errors.append(f"Output snippet: {res.stdout[:200]}")
             results[pair["id"]] = None
             return
-
         # Inject metadata
         meta_info = {
             "experiment": experiment,
