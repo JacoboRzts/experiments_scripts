@@ -72,19 +72,7 @@ class FatTree(Topo):
                 host = self.addHost(f"h{host_id}", ip=ip)
                 self.addLink(host, edge, port2=12 + i, bw=BANDWIDTH, delay=DELAY)
 
-def initialize_net(topology: str = 'sl', controller_ip: str = "172.17.0.2", controller_port: int = 6653):
-    """
-    Inicializa la red Mininet con la topología especificada.
-    
-    Args:
-        topology: 'sl' para Spine-Leaf, 'ft' para FatTree (jerárquica 3 capas)
-        controller_ip: IP del controlador SDN
-        controller_port: Puerto del controlador SDN
-    
-    Returns:
-        Mininet: Objeto de red Mininet ya iniciado
-    """
-    # Seleccionar la topología
+def build_network(topology: str = 'sl', controller_ip: str = "172.17.0.2", controller_port: int = 6653):
     match topology:
         case "sl":
             topo = SpineLeaf()
@@ -94,16 +82,8 @@ def initialize_net(topology: str = 'sl', controller_ip: str = "172.17.0.2", cont
             topo = FatTree()
         case _:
             raise ValueError(f"Topología {topology} no existe. Use 'sl' o 'ft'")
-    
-    # Crear el controlador remoto
     controller = RemoteController('odl', ip=controller_ip, port=controller_port)
-    
-    # Crear la red
     net = Mininet(topo=topo, link=TCLink, switch=OVSSwitch, controller=controller)
-    
-    # Iniciar la red
-    net.start()
-    
     return net
 
 def main():
