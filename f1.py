@@ -274,7 +274,7 @@ def run_single_pair(net, pair, pkt_size, rep, topology, experiment, out_dir, res
         if exitcode != 0:
             error(f"Exitcode {exitcode}, {err.strip()}")
             if check_connectivity(client, server.IP(), pair['port']):
-                ok("  Server running")
+                ok("Server running")
             else:
                 error("Server is not running")
         if not output.strip():
@@ -348,7 +348,7 @@ def run_experiment(net, experiment, topology, dry_run):
         rep = 1
         converged = False
         while rep <= REPS_MAX:
-            print(f"  {rep:02d}/{REPS_MAX:02d}")
+            print(f"  {rep:02d}/{REPS_MAX:02d}", end="")
             mbps_list = run_rep(net, pairs, pkt_size, rep, topology, experiment, out_dir, dry_run)
             valid = [v for v in mbps_list if v is not None]
             if valid:
@@ -384,7 +384,8 @@ def run_experiment(net, experiment, topology, dry_run):
         }
 
         rsd_str = f"{final_rsd:.1f}%" if final_rsd is not None else "N/A"
-        print(f"-> {rep} reps | {final_mean:.2f} Mbps | RSD={rsd_str} | {lr_pct:.1f}% LR\n")
+        print(f"─ {rep} reps | {final_mean:.2f} Mbps | RSD={rsd_str} | {lr_pct:.1f}% LR " + "─"*18)
+        print()
 
         if not dry_run:
             kill_all_iperf(net)
@@ -444,16 +445,13 @@ def main():
         experiments = ["a1", "b1", "b2"] if args.experiment == "all" else [args.experiment]
         topology = args.topology
 
-        # execute preflight
-        if not args.skip_preflight and not args.dry_run:
-            if not preflight(hosts):
-                error("Preflight falló. Verifica los hosts antes de continuar.")
-                return
-
-        # print configuration variables
         info(f"Experiments: {experiments}")
         info(f"Topology: {topology}")
-        print()
+        info(f"Package sizes: {PKT_SIZES}")
+        if not args.skip_preflight and not args.dry_run:
+            if not preflight(hosts):
+                error("Check all the tools before start again.")
+                return
 
         for experiment in experiments:
             run_experiment(net, experiment, topology, args.dry_run)
