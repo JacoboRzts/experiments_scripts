@@ -137,15 +137,24 @@ CONFIGURATION = {
 # COLOR FUNCTIONS
 class C:
     OK = "\033[32m"     # Green
-    WARN = "\033[93m"   # Yellow
-    ERROR = "\033[91m"  # Red
+    WRN = "\033[93m"    # Yellow
+    ERR = "\033[91m"    # Red
+    INFO = "\033[0;34m" # Blue
     BOLD = "\033[1m"
     DIM = "\033[2m"
     END = "\033[0m"
 
-def ok(msg, end="\n"): print(f" {C.OK} {msg} {C.END}", end=end)
-def warn(msg, end="\n"): print(f" {C.WARN}WARN{C.END}  {msg}", end=end)
-def error(msg, end="\n"): print(f" {C.ERROR}ERROR{C.END}  {msg}", end=end)
+def ok(msg, end="\n"):    print(f"{C.OK}  {msg} {C.END}", end=end)
+def info(msg, end="\n", start=" "):  print(f"{start} {C.INFO}INFO{C.END} {msg}", end=end)
+def warn(msg, end="\n", start=" "):  print(f"{start} {C.WRN}WARNING{C.END} {msg}", end=end)
+def error(msg, end="\n", start=" "): print(f"{start} {C.ERR}ERROR{C.END} {msg}", end=end)
+
+def check_connectivity(client, server_ip, port, timeout=3):
+    cmd = f"timeout {timeout} nc -zv {server_ip} {port} 2>&1"
+    result = client.cmd(cmd)
+    if "succeeded" not in result and "Connected" not in result:
+        return False
+    return True
 
 def is_iperf3_active(host) -> bool:
     result = host.cmd("pgrep -f iperf3 2>/dev/null")
@@ -162,22 +171,20 @@ def kill_all_iperf(net):
             kill_iperf(host)
 
 def start_servers(net, pairs):
+    info("Starting servers")
     for pair in pairs:
+        client = net.get(pair['client'])
         server = net.get(pair["server"])
         port = pair["port"]
-
-        if is_iperf3_active(server):
-            print(f"Stopping old process on {server.name}")
-            kill_iperf(server)
 
         cmd = f"iperf3 -s -p {port} -D"
         server.cmd(cmd)
         time.sleep(1)
 
         # Check if the server start.
-        check = server.cmd(f"ss -tlnp | grep {port}")
+        check = check_connectivity(client, server.IP(), port)
         if check:
-            print(f" * Server {server} started on port {port}")
+            ok(f"Server {server} started on port {port}")
         else:
             error(f"Can't start server on {server} with port {port} using command {cmd}")
 
@@ -237,7 +244,6 @@ def extract_mbps(data):
 def preflight(hosts):
     all_ok = True
     hosts_with_iperf = 0
-    print("─ Preflight " + "─"*40)
     for host in hosts:
         output = host.cmd("iperf3 --version 2>&1")
         host_ok = bool(output.strip())
@@ -246,7 +252,7 @@ def preflight(hosts):
             all_ok = False
         else:
             hosts_with_iperf += 1
-    ok(f"iperf3 installed on {hosts_with_iperf} hosts.\n")
+    info(f"iperf3 installed on {hosts_with_iperf} hosts.")
     return all_ok
 
 # LÓGICA DE EXPERIMENTO
@@ -264,35 +270,49 @@ def run_single_pair(net, pair, pkt_size, rep, topology, experiment, out_dir, res
         print(f"{cmd} -> {fname}")
         return
     try:
-        output = client.cmd(cmd)
+        output, err, exitcode = client.pexec(cmd)
+        if exitcode != 0:
+            error(f"Exitcode {exitcode}, {err.strip()}")
+            if check_connectivity(client, server.IP(), pair['port']):
+                ok("  Server running")
+            else:
+                error("Server is not running")
         if not output.strip():
-            errors.append(f"{pid}: iperf3 empty output.")
+            error(f"{pid}: iperf3 empty output.")
             return
         try:
             data = json.loads(output)
         except json.JSONDecodeError as e:
             debug_path = out_dir / f"RAW_{fname}.txt"
             debug_path.write_text(output)
-            errors.append(f"{pid}: JSON inválido: {e} (raw guardado en {debug_path.name})")
+            error(f"{pid}: JSON inválido: {e} (raw guardado en {debug_path.name})")
             return
         data = inject_meta(data, pair, pkt_size, rep, topology, experiment)
         data["_meta"]["server_ip"] = server_ip
         fpath.write_text(json.dumps(data, indent=2))
         results[pair["id"]] = extract_mbps(data)
     except Exception as e:
-        errors.append(f"{pid}: Excepción inesperada: {type(e).__name__}: {e}")
+        error(f"{pid}: Excepción inesperada: {type(e).__name__}: {e}")
         kill_iperf(client)
 
 def run_rep(net, pairs, pkt_size, rep, topology, experiment, out_dir, dry_run):
     results = {}
     errors = []
 
-    for p in pairs:
-        # Ejecutar secuencialmente, sin hilos
-        run_single_pair(net, p, pkt_size, rep, topology, experiment, out_dir,
-                        results, errors, dry_run)
-        # Pequeña pausa entre clientes para evitar congestionar el controlador
-        time.sleep(1)
+    threads = [
+        threading.Thread(
+            target=run_single_pair,
+            args=(net, p, pkt_size, rep, topology, experiment,
+                  out_dir, results, errors, dry_run),
+        )
+        for p in pairs
+    ]
+
+    for t in threads:
+        t.start()
+
+    for t in threads:
+        t.join(timeout=DURATION + 35)
 
     # Mostrar errores (igual que antes)
     for err in errors:
@@ -300,7 +320,7 @@ def run_rep(net, pairs, pkt_size, rep, topology, experiment, out_dir, dry_run):
         lines = err.split('\n')
         for line in lines:
             if line.strip():
-                print(f"    {line}")
+                print(line)
 
     return [results.get(p["id"]) for p in pairs]
 
@@ -317,29 +337,30 @@ def run_experiment(net, experiment, topology, dry_run):
     if dry_run:
         print( "  Modo:        Dry-Run")
     print('─'*64)
+    print()
 
     summary = {}
     for pkt_size in PKT_SIZES:
         throughputs_per_rep = []
         if not dry_run:
             start_servers(net, pairs)
-        print(f"── PKT {pkt_size:>4d} B " + "─"*50)
+        print(f"─ PKT {pkt_size:>4d} B " + "─"*50)
         rep = 1
         converged = False
         while rep <= REPS_MAX:
-            print(f"  {rep:02d}/{REPS_MAX}  ", end="")
+            print(f"  {rep:02d}/{REPS_MAX:02d}")
             mbps_list = run_rep(net, pairs, pkt_size, rep, topology, experiment, out_dir, dry_run)
             valid = [v for v in mbps_list if v is not None]
             if valid:
                 rep_mean = statistics.mean(valid)
                 throughputs_per_rep.append(rep_mean)
-                ok(f"  {rep_mean:8.2f} Mbps  [{len(valid)}/{len(pairs)} ok]", end="")
+                ok(f"{rep_mean:8.2f}Mbps [{len(valid)}/{len(pairs)} ok]", end="")
             else:
                 error("All pairs faild.", end="")
             if rep >= REPS_MIN and len(throughputs_per_rep) >= REPS_MIN:
                 rsd = compute_rsd(throughputs_per_rep)
                 if rsd is not None:
-                    print(f"  RSD={rsd:.1f}%", end="")
+                    print(f" RSD={rsd:.1f}%", end="")
                     if rsd <= RSD_TARGET:
                         ok("converge")
                         converged = True
@@ -363,7 +384,7 @@ def run_experiment(net, experiment, topology, dry_run):
         }
 
         rsd_str = f"{final_rsd:.1f}%" if final_rsd is not None else "N/A"
-        print(f"  -> {rep} reps | {final_mean:.2f} Mbps | RSD={rsd_str} | {lr_pct:.1f}% LR\n")
+        print(f"-> {rep} reps | {final_mean:.2f} Mbps | RSD={rsd_str} | {lr_pct:.1f}% LR\n")
 
         if not dry_run:
             kill_all_iperf(net)
@@ -430,8 +451,9 @@ def main():
                 return
 
         # print configuration variables
-        print(f"Experiments: {experiments}")
-        print(f"Topology: {topology}")
+        info(f"Experiments: {experiments}")
+        info(f"Topology: {topology}")
+        print()
 
         for experiment in experiments:
             run_experiment(net, experiment, topology, args.dry_run)
