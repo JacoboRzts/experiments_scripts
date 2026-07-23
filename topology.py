@@ -72,6 +72,20 @@ class FatTree(Topo):
                 host = self.addHost(f"h{host_id}", ip=ip)
                 self.addLink(host, edge, port2=12 + i, bw=BANDWIDTH, delay=DELAY)
 
+def build_network(topology: str = 'sl', controller_ip: str = "172.17.0.2", controller_port: int = 6653):
+    match topology:
+        case "sl":
+            topo = SpineLeaf()
+        case "ft":
+            topo = FatTree()
+        case "j3c":  # Alias para FatTree
+            topo = FatTree()
+        case _:
+            raise ValueError(f"Topología {topology} no existe. Use 'sl' o 'ft'")
+    controller = RemoteController('odl', ip=controller_ip, port=controller_port)
+    net = Mininet(topo=topo, link=TCLink, switch=OVSSwitch, controller=controller)
+    return net
+
 def main():
     import argparse
 
