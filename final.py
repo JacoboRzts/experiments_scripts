@@ -18,7 +18,7 @@ RSD_TARGET = 10.0
 REPS_MIN = 2
 REPS_MAX = 5
 PKT_SIZES = [64, 128, 256, 512, 1024]
-BANDWIDTH = "1000M"
+BANDWIDTH = "1G"
 CONGESTION_ALGORITHM = "cubic"
 
 PROTOCOL_OPTIONS = ["udp", "tcp"]
@@ -320,7 +320,6 @@ def run_pair(net, pair, pkt_size, protocol, results, fname_template, path):
     else:
         flag = "-u"
     cmd = f"iperf3 -c {server.IP()} -p {port} -t {DURATION} -l {pkt_size} -b {BANDWIDTH} {flag} -J"
-    info(f"Running pair {pid} command: {cmd}")
     output, err, exitcode = client.pexec(cmd)
     if exitcode != 0:
         error(f"[{pid}] Exitcode {exitcode}, {err.strip()}")
@@ -333,7 +332,6 @@ def run_pair(net, pair, pkt_size, protocol, results, fname_template, path):
         warn(f"{pid}: iperf3 empty output.")
     metrics = extract_metrics(output, protocol)
     fname = fname_template.replace("pid", pid)
-    info(f"[{pid}] Saving results on: {fname}")
     save_results(fname, path, output)
     results[pid] = metrics
 
